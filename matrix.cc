@@ -40,17 +40,6 @@ void Matrix::uniform(float a, float b) {
   }
 }
 
-void Matrix::zero() {
-  int x = this->size()[0];
-  int y = this->size()[1];
-  Matrix result(x, y);
-  for (int i = 0; i < x; i++) {
-    for (int j = 0; j < y; j++) {
-      this->data[i][j] = 0.0;
-    }
-  }
-};
-
 void Matrix::ones() {
   int x = this->size()[0];
   int y = this->size()[1];
@@ -186,9 +175,9 @@ Matrix Matrix::matmul(Matrix& other) {
     result.init_grad();
   }
 
-  result.zero();
   for (int i = 0; i < x; i++) {
     for (int j = 0; j < y; j++) {
+      result.data[i][j] = 0;
       for (int k = 0; k < z; k++) {
         result.data[i][j] += data[i][k] * other.data[k][j];
       }

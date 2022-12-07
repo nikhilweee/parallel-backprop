@@ -20,12 +20,12 @@ class Matrix {
   // attributes
   vector2d data;
   Matrix* grad;
+  float* array;
   bool requires_grad = false;
   // reshape
   Matrix cols(int a, int b);
   // initialize
   void init_grad();
-  void zero();
   void ones();
   void uniform(float a, float b);
   // self operations
@@ -41,6 +41,8 @@ class Matrix {
   Matrix add(Matrix other);
   Matrix matmul(Matrix& other);
   // size and data
+  void to_array();
+  void from_array();
   vector<int> size();
   void print_data();
   string size_str();
