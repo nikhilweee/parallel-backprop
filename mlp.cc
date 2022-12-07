@@ -37,42 +37,45 @@ class MLP {
   Matrix weight = Matrix(8, 1);
   Matrix bias = Matrix(1, 1);
   MLP() {
-    weight.uniform(-1, 1);
+    weight.uniform(-0.35, 0.35);
     weight.init_grad();
-    bias.uniform(-1, 1);
+    bias.uniform(-0.35, 0.35);
     bias.init_grad();
   }
 };
 
 int main() {
   Matrix train = load_csv("train.csv");
-  cout << "train_size: " << train.size_str() << endl;
   Matrix input = train.cols(0, 8);
+  cout << input.size_str() << endl;
   Matrix target = train.cols(8, 9);
   float batch_size = input.size()[0];
   float lr = 1e-7;
   MLP net;
 
-  for (int epoch = 0; epoch < 1000; epoch++) {
+  Matrix prod, out, target_neg, diff, diff_sq, diff_sq_div;
+  Matrix diff_sq_grad, diff_grad, bias_grad, weight_grad, update;
+
+  for (int epoch = 0; epoch < 101; epoch++) {
     ///////////////
     // FORWARD
     ///////////////
 
     // prod: (N, 1), input: (N, 8), weight: (8, 1)
-    Matrix prod = input.matmul(net.weight);
+    prod = input.matmul(net.weight);
     // out: (N, 1), prod: (N, 1), bias: (1, 1)
-    Matrix out = prod.add(net.bias);
+    out = prod.add(net.bias);
 
-    Matrix target_neg = target.mul(-1);
+    target_neg = target.mul(-1);
     // diff: (N, 1), out: (N, 1), target: (N, 1)
-    Matrix diff = out.add(target_neg);
+    diff = out.add(target_neg);
 
-    Matrix diff_sq = diff.square();
-    Matrix diff_sq_div = diff_sq.mul(1/batch_size);
+    diff_sq = diff.square();
+    diff_sq_div = diff_sq.mul(1/batch_size);
     float loss = diff_sq_div.sum();
 
     if (epoch < 10 || epoch % 10 == 0) {
-      printf("epoch: %04d loss: %10.04f\n", epoch, loss);
+      printf("epoch: %04d loss: %.05f\n", epoch, loss);
     }
 
     ///////////////
@@ -86,12 +89,12 @@ int main() {
     // diff_sq_div.grad: (N, 1)
 
     // route over multiply
-    Matrix diff_sq_grad = diff_sq.grad->mul(1 / batch_size);
+    diff_sq_grad = diff_sq.grad->mul(1 / batch_size);
     diff_sq.grad = &diff_sq_grad;
     // diff_sq.grad: (N, 1)
 
     // d/dx(x^2) = 2x
-    Matrix diff_grad = diff.mul(2);
+    diff_grad = diff.mul(2);
     diff.grad = &diff_grad;
     diff.grad->mulip(diff_sq.grad);
     // diff.grad: (N, 1)
@@ -106,30 +109,18 @@ int main() {
 
     // net.bias was resized
     // so we need to sum
-    Matrix bias_grad = net.bias.grad->mul(out.grad->sum());
+    bias_grad = net.bias.grad->mul(out.grad->sum());
     net.bias.grad = &bias_grad;
     // net.bias.grad: (1, 1)
 
     // rules of matrix backprop
-    Matrix weight_grad = input.transpose().matmul(*out.grad);
+    weight_grad = input.transpose().matmul(*out.grad);
     net.weight.grad = &weight_grad;
     // net.weight.grad: (8, 1)
 
     ///////////////
     // UPDATE
     ///////////////
-
-    if (std::log10(loss) > 8) {
-      lr *= 0.5;
-      printf("epoch: %04d dec lr: %.5e\n", epoch, lr);
-    }
-
-    if (epoch % 100 == 0) {
-      lr *= 1.1;
-      printf("epoch: %04d inc lr: %.5e\n", epoch, lr);
-    }
-
-    Matrix update;
 
     update = net.weight.grad->mul(-lr);
     net.weight = net.weight.add(update);
