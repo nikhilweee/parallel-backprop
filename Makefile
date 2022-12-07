@@ -1,11 +1,14 @@
 CXX = g++
 CXXFLAGS = -Wall -g -O0 -std=c++11
+# CXXFLAGS = -Wall -std=c++11
 CU = nvcc
 CUFLAGS = -g -G -O0 -std=c++11
+# CUFLAGS = -std=c++11
 
 CPU_OUT = cpu.out
 CUDA_OUT = cuda.out
 TEST_OUT = tests.out
+INFO_OUT = info.out
 
 all: cpu cuda
 
@@ -23,7 +26,6 @@ cpu_tests: tests.cc
 
 cuda_tests: tests.cc
 	$(CU) $(CUFLAGS) -o $(TEST_OUT) tests.cc matrix.cu
-
 
 run_all:
 	$(MAKE) run_cpu
@@ -48,5 +50,24 @@ run_cuda_tests:
 	$(MAKE) clean
 	$(MAKE) cuda_tests
 	$(PWD)/${TEST_OUT}
+
+run_cpu_profile:
+	$(MAKE) clean
+	$(CXX) $(CXXFLAGS) -pg -o $(CPU_OUT) mlp.cc matrix.cc
+	$(PWD)/$(CPU_OUT)
+	gprof -p -l -b -a $(PWD)/$(CPU_OUT)
+
+run_cuda_profile:
+	$(MAKE) clean
+	$(CU) $(CUFLAGS) -o $(CUDA_OUT) mlp.cc matrix.cu
+	nvprof \
+	--cpu-profiling on \
+	--cpu-profiling-mode flat \
+	--cpu-profiling-show-library on \
+	$(PWD)/$(CUDA_OUT)
+
+run_info:
+	$(CU) $(CUFLAGS) -o $(INFO_OUT) info.cu
+	$(PWD)/$(INFO_OUT)
 
 .SILENT:

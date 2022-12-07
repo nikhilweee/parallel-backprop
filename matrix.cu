@@ -216,17 +216,51 @@ void Matrix::mulip(Matrix* other) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+__global__ void transpose_kernel(float* result, float* self, int x, int y, int N) {
+  int row = threadIdx.x + blockDim.x * blockIdx.x;
+  int col = threadIdx.y + blockDim.y * blockIdx.y;
+
+  if (idx(row, col, x) < N && idx(col, row, y) < N) {
+    result[idx(row, col, x)] = self[idx(col, row, y)];
+  }
+}
+
 Matrix Matrix::transpose() {
   int x = this->size()[0];
   int y = this->size()[1];
+  int N = x * y;
+
   Matrix result = Matrix(y, x);
-  for (int i = 0; i < y; i++) {
-    for (int j = 0; j < x; j++) {
-      result.data[i][j] = this->data[j][i];
-    }
-  }
+
+  int size = N * sizeof(float);
+
+  float* self_cuda;
+  cudaMalloc((void**)&self_cuda, size);
+  this->to_array();
+  cudaMemcpy(self_cuda, this->array, size, cudaMemcpyHostToDevice);
+
+  float* result_cuda;
+  cudaMalloc((void**)&result_cuda, size);
+  result.to_array();
+  cudaMemcpy(result_cuda, result.array, size, cudaMemcpyHostToDevice);
+
+  dim3 num_threads(32, 32);
+  dim3 num_blocks(1, 1);
+  num_blocks.x = ceil((float)x / 512);
+  num_blocks.y = ceil((float)y / 512);
+  transpose_kernel<<<num_blocks, num_threads>>>(result_cuda, self_cuda, x, y, N);
+
+  cudaMemcpy(result.array, result_cuda, size, cudaMemcpyDeviceToHost);
+
+  cudaFree(self_cuda);
+  cudaFree(result_cuda);
+
+  result.from_array();
+
   return result;
 };
+
+////////////////////////////////////////////////////////////////////////////////
 
 float Matrix::sum() {
   int x = this->size()[0];
