@@ -4,13 +4,24 @@
 
 #include "matrix.h"
 
+#define idx(i, j, N) ((i) * (N)) + (j)
+
 void assert_equal(Matrix mat, vector2d test) {
   int x = mat.size()[0];
   int y = mat.size()[1];
+  float diff;
   for (int i = 0; i < x; i++) {
     for (int j = 0; j < y; j++) {
-      float diff = (mat.data[i][j] - test[i][j]);
+      diff = (mat.data[i][j] - test[i][j]);
       assert(abs(diff) < 0.0001);
+    }
+  }
+  if (mat.device == cuda) {
+    for (int i = 0; i < x; i++) {
+      for (int j = 0; j < y; j++) {
+        diff = (mat.array[idx(i, j, y)] - test[i][j]);
+        assert(abs(diff) < 0.0001);
+      }
     }
   }
 }
@@ -23,6 +34,9 @@ Matrix test_init(int x, int y) {
     for (int j = 0; j < y; j++) {
       out.data[i][j] = ++num;
     }
+  }
+  if (out.device == cuda) {
+    out.to_arrays();
   }
   out.print_size();
   return out;
@@ -49,11 +63,11 @@ Matrix test_add(Matrix& mat1, Matrix& mat2) {
   return out;
 }
 
-Matrix test_square(Matrix& mat) {
-  cout << "test_square" << endl;
-  Matrix out = mat.square();
-  out.print_size();
-  return out;
+Matrix test_mulip(Matrix& mat) {
+  cout << "test_mulip" << endl;
+  mat.mulip(&mat);
+  mat.print_size();
+  return mat;
 }
 
 Matrix test_mul(Matrix& mat, float other) {
@@ -80,13 +94,14 @@ Matrix test_tanh(Matrix& mat) {
 int main() {
   Matrix mat1, mat2, mat3;
   vector2d test;
+
   mat1 = test_init(3, 3);
   assert_equal(mat1, {{1, 2, 3}, {4, 5, 6}, {7, 8, 9}});
   mat2 = test_init(1, 3);
   assert_equal(mat2, {{1, 2, 3}});
   mat3 = test_add(mat1, mat2);
   assert_equal(mat3, {{2, 4, 6}, {5, 7, 9}, {8, 10, 12}});
-  
+
   mat1 = test_init(2, 3);
   assert_equal(mat1, {{1, 2, 3}, {4, 5, 6}});
   mat2 = test_transpose(mat1);
@@ -94,19 +109,24 @@ int main() {
   mat3 = test_matmul(mat1, mat2);
   assert_equal(mat3, {{14, 32}, {32, 77}});
   // release mat1, mat2
+
   mat1 = test_init(2, 2);
   mat2 = test_add(mat3, mat1);
   assert_equal(mat2, {{15, 34}, {35, 81}});
   // release mat1, mat2, mat3
+
   mat2 = test_mul(mat1, 0.25);
   assert_equal(mat2, {{0.25, 0.5}, {0.75, 1.0}});
   // release mat1
-  mat1 = test_square(mat2);
+
+  mat1 = test_mulip(mat2);
   assert_equal(mat1, {{0.0625, 0.25}, {0.5625, 1.0}});
   // release mat2
+
   mat2 = test_tanh(mat1);
   assert_equal(mat2, {{0.0624, 0.2449}, {0.5098, 0.7616}});
   // release mat1
+
   mat1 = test_cols(mat2, 0, 1);
   assert_equal(mat1, {{0.0624}, {0.5098}});
 }

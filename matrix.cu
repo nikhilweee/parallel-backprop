@@ -7,35 +7,79 @@
 
 #define idx(i, j, N) ((i) * (N)) + (j)
 
-void print_array(float* array, int size) {
-  printf("array [%d]: ", size);
-  for (int i = 0; i < size; i++) {
-    printf("%.05f ", array[i]);
+////////////////////////////////////////////////////////////////////////////////
+
+cudaError_t cudaMallocError(void** dev_ptr, size_t size) {
+  cudaError_t err = cudaSuccess;
+  err = cudaMalloc(dev_ptr, size);
+  if (err) {
+    cout << "cudaMalloc error: " << cudaGetErrorString(err) << endl;
+    exit(EXIT_FAILURE);
   }
-  cout << endl;
+  return err;
+}
+
+cudaError_t cudaMemcpyError(void* dst, const void* src, size_t count,
+                            cudaMemcpyKind kind) {
+  cudaError_t err = cudaSuccess;
+  err = cudaMemcpy(dst, src, count, kind);
+  if (err) {
+    cout << "cudaMemcpy error: " << cudaGetErrorString(err) << endl;
+    exit(EXIT_FAILURE);
+  }
+  return err;
+}
+
+cudaError_t cudaFreeError(void* dev_ptr) {
+  cudaError_t err = cudaSuccess;
+  err = cudaFree(dev_ptr);
+  if (err) {
+    cout << "cudaFree error: " << cudaGetErrorString(err) << endl;
+    exit(EXIT_FAILURE);
+  }
+  return err;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
 Matrix::Matrix(){};
 Matrix::Matrix(vector2d& input) : data(input){};
+
 Matrix::Matrix(int x, int y) {
+  int N = x * y;
+
+  this->array = new float[N];
+  this->cuda_array = new float[N];
+
   for (int i = 0; i < x; i++) {
     vector1d row;
     for (int j = 0; j < y; j++) {
+      this->array[idx(i, j, y)] = 1.0;
       row.push_back(1.0);
     }
     this->data.push_back(row);
   }
+
+  // Allocate CUDA Memory
+  int size = N * sizeof(float);
+  cudaMallocError((void**)&this->cuda_array, size);
+  cudaMemcpyError(this->cuda_array, this->array, size, cudaMemcpyHostToDevice);
+  this->device = cuda;
+};
+
+Matrix::~Matrix() {
+  // cudaFreeError(this->cuda_array);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
-void Matrix::to_array() {
+void Matrix::to_arrays() {
+  // data to arrays
   int x = this->size()[0];
   int y = this->size()[1];
   int N = x * y;
 
+  // copy to array
   float* array = new float[N];
   for (int i = 0; (i < x); i++) {
     for (int j = 0; (j < y); j++) {
@@ -43,19 +87,25 @@ void Matrix::to_array() {
     }
   }
   this->array = array;
+
+  // copy to cuda_array
+  int size = x * y * sizeof(float);
+  cudaMemcpyError(this->cuda_array, this->array, size, cudaMemcpyHostToDevice);
 }
 
-void Matrix::from_array() {
+void Matrix::from_cuda_array() {
   int x = this->size()[0];
   int y = this->size()[1];
-
-  // TODO: check if size of array matches
+  int size = x * y * sizeof(float);
+  cudaMemcpyError(this->array, this->cuda_array, size, cudaMemcpyDeviceToHost);
   for (int i = 0; (i < x); i++) {
     for (int j = 0; (j < y); j++) {
       this->data[i][j] = this->array[idx(i, j, y)];
     }
   }
 }
+
+////////////////////////////////////////////////////////////////////////////////
 
 void Matrix::init_grad() {
   this->requires_grad = true;
@@ -64,8 +114,6 @@ void Matrix::init_grad() {
   Matrix* grad = new Matrix(x, y);
   this->grad = grad;
 }
-
-////////////////////////////////////////////////////////////////////////////////
 
 void Matrix::uniform(float a, float b) {
   int x = this->size()[0];
@@ -93,17 +141,32 @@ void Matrix::ones() {
   }
 };
 
+////////////////////////////////////////////////////////////////////////////////
+
+__global__ void tanh_kernel(float* result, float* self, int N) {
+  int index = threadIdx.x + blockDim.x * blockIdx.x;
+  int stride = blockDim.x * gridDim.x;
+  for (int i = index; i < N; i += stride) {
+    result[i] = std::tanh(self[i]);
+  }
+}
+
 Matrix Matrix::tanh() {
   int x = this->size()[0];
   int y = this->size()[1];
+  int N = x * y;
+
   Matrix result(x, y);
-  for (int i = 0; i < x; i++) {
-    for (int j = 0; j < y; j++) {
-      result.data[i][j] = std::tanh(this->data[i][j]);
-    }
-  }
+
+  int num_blocks = ceil((float)N / 512);
+  tanh_kernel<<<num_blocks, 512>>>(result.cuda_array, this->cuda_array, N);
+
+  result.from_cuda_array();
+
   return result;
 };
+
+////////////////////////////////////////////////////////////////////////////////
 
 Matrix Matrix::square() {
   int x = this->size()[0];
@@ -143,27 +206,11 @@ Matrix Matrix::mul(float other) {
     result.init_grad();
   }
 
-  int size = N * sizeof(float);
-
-  float* self_cuda;
-  cudaMalloc((void**)&self_cuda, size);
-  this->to_array();
-  cudaMemcpy(self_cuda, this->array, size, cudaMemcpyHostToDevice);
-
-  float* result_cuda;
-  cudaMalloc((void**)&result_cuda, size);
-  result.to_array();
-  cudaMemcpy(result_cuda, result.array, size, cudaMemcpyHostToDevice);
-
   int num_blocks = ceil((float)N / 512);
-  mul_kernel<<<num_blocks, 512>>>(result_cuda, self_cuda, other, N);
+  mul_kernel<<<num_blocks, 512>>>(result.cuda_array, this->cuda_array, other,
+                                  N);
 
-  cudaMemcpy(result.array, result_cuda, size, cudaMemcpyDeviceToHost);
-
-  cudaFree(self_cuda);
-  cudaFree(result_cuda);
-
-  result.from_array();
+  result.from_cuda_array();
 
   return result;
 };
@@ -192,31 +239,15 @@ void Matrix::mulip(Matrix* other) {
     }
   }
 
-  int size = N * sizeof(float);
+  mulip_kernel<<<1, 512>>>(this->cuda_array, other->cuda_array, N);
 
-  float* self_cuda;
-  cudaMalloc((void**)&self_cuda, size);
-  this->to_array();
-  cudaMemcpy(self_cuda, this->array, size, cudaMemcpyHostToDevice);
-
-  float* other_cuda;
-  cudaMalloc((void**)&other_cuda, size);
-  other->to_array();
-  cudaMemcpy(other_cuda, other->array, size, cudaMemcpyHostToDevice);
-
-  mulip_kernel<<<1, 512>>>(self_cuda, other_cuda, N);
-
-  cudaMemcpy(this->array, self_cuda, size, cudaMemcpyDeviceToHost);
-
-  cudaFree(self_cuda);
-  cudaFree(other_cuda);
-
-  this->from_array();
+  this->from_cuda_array();
 };
 
 ////////////////////////////////////////////////////////////////////////////////
 
-__global__ void transpose_kernel(float* result, float* self, int x, int y, int N) {
+__global__ void transpose_kernel(float* result, float* self, int x, int y,
+                                 int N) {
   int row = threadIdx.x + blockDim.x * blockIdx.x;
   int col = threadIdx.y + blockDim.y * blockIdx.y;
 
@@ -232,30 +263,14 @@ Matrix Matrix::transpose() {
 
   Matrix result = Matrix(y, x);
 
-  int size = N * sizeof(float);
-
-  float* self_cuda;
-  cudaMalloc((void**)&self_cuda, size);
-  this->to_array();
-  cudaMemcpy(self_cuda, this->array, size, cudaMemcpyHostToDevice);
-
-  float* result_cuda;
-  cudaMalloc((void**)&result_cuda, size);
-  result.to_array();
-  cudaMemcpy(result_cuda, result.array, size, cudaMemcpyHostToDevice);
-
   dim3 num_threads(32, 32);
   dim3 num_blocks(1, 1);
   num_blocks.x = ceil((float)x / 512);
   num_blocks.y = ceil((float)y / 512);
-  transpose_kernel<<<num_blocks, num_threads>>>(result_cuda, self_cuda, x, y, N);
+  transpose_kernel<<<num_blocks, num_threads>>>(result.cuda_array,
+                                                this->cuda_array, x, y, N);
 
-  cudaMemcpy(result.array, result_cuda, size, cudaMemcpyDeviceToHost);
-
-  cudaFree(self_cuda);
-  cudaFree(result_cuda);
-
-  result.from_array();
+  result.from_cuda_array();
 
   return result;
 };
@@ -280,13 +295,12 @@ Matrix Matrix::cols(int a, int b) {
   for (int i = 0; i < x; i++) {
     for (int j = a; j < b; j++) {
       result.data[i][j - a] = this->data[i][j];
+      result.array[idx(i, j - a, b - a)] = this->data[i][j];
     }
   }
   return result;
 };
 
-////////////////////////////////////////////////////////////////////////////////
-// Core operations
 ////////////////////////////////////////////////////////////////////////////////
 
 __global__ void matmul_kernel(float* result, float* self, float* other, int x,
@@ -311,7 +325,6 @@ Matrix Matrix::matmul(Matrix& other) {
   int x = this->size()[0];
   int y = other.size()[1];
   int z = this->size()[1];
-  int N = x * y;
 
   Matrix result = Matrix(x, y);
 
@@ -325,39 +338,14 @@ Matrix Matrix::matmul(Matrix& other) {
     result.init_grad();
   }
 
-  int size_self = x * z * sizeof(float);
-  int size_other = z * y * sizeof(float);
-  int size_result = N * sizeof(float);
-
-  float* self_cuda;
-  cudaMalloc((void**)&self_cuda, size_self);
-  this->to_array();
-  cudaMemcpy(self_cuda, this->array, size_self, cudaMemcpyHostToDevice);
-
-  float* other_cuda;
-  cudaMalloc((void**)&other_cuda, size_other);
-  other.to_array();
-  cudaMemcpy(other_cuda, other.array, size_other, cudaMemcpyHostToDevice);
-
-  float* result_cuda;
-  cudaMalloc((void**)&result_cuda, size_result);
-  result.to_array();
-  cudaMemcpy(result_cuda, result.array, size_result, cudaMemcpyHostToDevice);
-
   dim3 num_threads(32, 32);
   dim3 num_blocks(1, 1);
   num_blocks.x = ceil((float)x / 512);
   num_blocks.y = ceil((float)y / 512);
-  matmul_kernel<<<num_blocks, num_threads>>>(result_cuda, self_cuda, other_cuda,
-                                             x, y, z);
+  matmul_kernel<<<num_blocks, num_threads>>>(
+      result.cuda_array, this->cuda_array, other.cuda_array, x, y, z);
 
-  cudaMemcpy(result.array, result_cuda, size_result, cudaMemcpyDeviceToHost);
-
-  cudaFree(self_cuda);
-  cudaFree(other_cuda);
-  cudaFree(result_cuda);
-
-  result.from_array();
+  result.from_cuda_array();
   return result;
 };
 
@@ -389,6 +377,7 @@ Matrix Matrix::add(Matrix other) {
         interm.data[i][j] = other.data[0][j];
       }
     }
+    interm.to_arrays();
     other = interm;
   }
 
@@ -410,38 +399,18 @@ Matrix Matrix::add(Matrix other) {
     result.init_grad();
   }
 
-  int size = N * sizeof(float);
-
-  float* self_cuda;
-  cudaMalloc((void**)&self_cuda, size);
-  this->to_array();
-  cudaMemcpy(self_cuda, this->array, size, cudaMemcpyHostToDevice);
-
-  float* other_cuda;
-  cudaMalloc((void**)&other_cuda, size);
-  other.to_array();
-  cudaMemcpy(other_cuda, other.array, size, cudaMemcpyHostToDevice);
-
-  float* result_cuda;
-  cudaMalloc((void**)&result_cuda, size);
-  result.to_array();
-  cudaMemcpy(result_cuda, result.array, size, cudaMemcpyHostToDevice);
-
   int num_blocks = ceil((float)N / 512);
-  add_kernel<<<num_blocks, 512>>>(result_cuda, self_cuda, other_cuda, N);
+  add_kernel<<<num_blocks, 512>>>(result.cuda_array, this->cuda_array,
+                                  other.cuda_array, N);
 
-  cudaMemcpy(result.array, result_cuda, size, cudaMemcpyDeviceToHost);
-
-  cudaFree(self_cuda);
-  cudaFree(other_cuda);
-  cudaFree(result_cuda);
-
-  result.from_array();
+  result.from_cuda_array();
 
   return result;
 };
 
+////////////////////////////////////////////////////////////////////////////////
 // Helper functions
+////////////////////////////////////////////////////////////////////////////////
 
 void Matrix::print_data() {
   for (vector1d row : data) {
@@ -476,4 +445,23 @@ string Matrix::size_str() {
 void Matrix::print_size() {
   // useless comment
   cout << size_str() << endl;
+};
+
+void Matrix::print_array(int N) {
+  printf("array [%d]: ", N);
+  for (int i = 0; i < N; i++) {
+    printf("%.05f ", this->array[i]);
+  }
+  cout << endl;
+};
+
+void Matrix::print_cuda(int N) {
+  float* temp = new float[N];
+  int size = N * sizeof(float);
+  cudaMemcpyError(temp, this->cuda_array, size, cudaMemcpyDeviceToHost);
+  printf("cuda  [%d]: ", N);
+  for (int i = 0; i < N; i++) {
+    printf("%.05f ", temp[i]);
+  }
+  cout << endl;
 };

@@ -9,6 +9,8 @@ using namespace std;
 typedef vector<float> vector1d;
 typedef vector<vector1d> vector2d;
 
+enum dev {cpu, cuda};
+
 class Matrix {
  private:
 
@@ -17,11 +19,14 @@ class Matrix {
   Matrix();
   Matrix(vector2d& input);
   Matrix(int x, int y);
+  ~Matrix();
   // attributes
   vector2d data;
   Matrix* grad;
   float* array;
+  float* cuda_array;
   bool requires_grad = false;
+  dev device = cpu;
   // reshape
   Matrix cols(int a, int b);
   // initialize
@@ -41,12 +46,14 @@ class Matrix {
   Matrix add(Matrix other);
   Matrix matmul(Matrix& other);
   // size and data
-  void to_array();
-  void from_array();
+  void to_arrays();
+  void from_cuda_array();
   vector<int> size();
-  void print_data();
   string size_str();
   void print_size();
+  void print_data();
+  void print_array(int N);
+  void print_cuda(int N);
 };
 
 #endif

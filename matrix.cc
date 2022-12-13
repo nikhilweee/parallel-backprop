@@ -6,7 +6,10 @@
 #include <string>
 
 Matrix::Matrix(){};
+Matrix::~Matrix(){};
+
 Matrix::Matrix(vector2d& input) : data(input){};
+
 Matrix::Matrix(int x, int y) {
   for (int i = 0; i < x; i++) {
     vector1d row;
@@ -16,6 +19,8 @@ Matrix::Matrix(int x, int y) {
     this->data.push_back(row);
   }
 }
+
+void Matrix::to_arrays(){};
 
 void Matrix::init_grad() {
   this->requires_grad = true;
